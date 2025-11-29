@@ -1,27 +1,40 @@
-FROM alpine:latest
-WORKDIR /app
-# 确保安装了 bash, curl, wget 等基础工具
-RUN apk add --no-cache curl wget bash ca-certificates tar
+# 切换到 Debian 系统，以便安装 WARP CLI
+FROM debian:bookworm-slim
 
-# 1. 下载 Cloudflared 官方二进制文件 (防止 404/403 封锁)
-RUN wget -q -O /usr/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && \
-    chmod +x /usr/bin/cloudflared
+# 保持非交互模式
+ENV DEBIAN_FRONTEND=noninteractive
 
-# 2. 下载 Sing-box 官方二进制文件 (防止 404/403 封锁)
-RUN wget -q -O sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.9.0/sing-box-1.9.0-linux-amd64.tar.gz && \
-    tar -xzf sing-box.tar.gz && mv sing-box-*/sing-box /usr/bin/sing-box && chmod +x /usr/bin/sing-box && \
-    rm -rf sing-box-* sing-box.tar.gz
+# 安装依赖、Cloudflare 服务和 Sing-box
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+        curl wget bash ca-certificates uuid-runtime gnupg2 procps iproute2 && \
+    # 1. 安装 Cloudflared (官方源)
+    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --dearmor | tee /usr/share/keyrings/cloudflare-warp.gpg >/dev/null && \
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ bookworm main" | tee /etc/apt/sources.list.d/cloudflare-warp.list && \
+    apt-get update -y && \
+    apt-get install -y cloudflared && \
+    # 2. 安装 WARP CLI (官方源)
+    apt-get install -y warp-cli && \
+    # 3. 下载 Sing-box (官方源)
+    wget -qO singbox.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.9.0/sing-box-1.9.0-linux-amd64.tar.gz && \
+    tar -xzf singbox.tar.gz && \
+    mv sing-box-*/sing-box /usr/bin/sing-box && \
+    chmod +x /usr/bin/sing-box && \
+    # 清理缓存
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-# 3. 创建启动脚本 (/start.sh)
+# 最终启动脚本
 RUN echo '#!/bin/bash' > /start.sh && \
-    # 生成 config.json - 关键：加入 transport":{"type":"ws","path":"/"}
+    # 1. 启动 WARP (必须先运行)
+    echo 'warp-cli set-mode tunnel && warp-cli set-proxy-mode remote && warp-cli connect' >> /start.sh && \
+    echo 'sleep 10' >> /start.sh && \
+    # 2. 生成 Sing-box Config (VLESS/WS Inbound)
     echo 'echo "{\"inbounds\":[{\"type\":\"vless\",\"tag\":\"vless-in\",\"listen\":\"::\",\"listen_port\":8080,\"users\":[{\"uuid\":\"$UUID\"}],\"transport\":{\"type\":\"ws\",\"path\":\"/\"}}],\"outbounds\":[{\"type\":\"direct\"}]}" > config.json' >> /start.sh && \
-    echo 'echo \"VLESS Config Ready\"' >> /start.sh && \
-    # 启动 Sing-box (后台运行)
+    # 3. 启动服务 (Sing-box & Cloudflared)
     echo 'sing-box run -c config.json &' >> /start.sh && \
-    # 启动 Cloudflared (前台运行，确保容器不退出)
     echo 'cloudflared tunnel run --token $ARGO_AUTH' >> /start.sh && \
     chmod +x /start.sh
 
-# 默认启动命令
+# 启动命令
 CMD ["/bin/bash", "/start.sh"]
