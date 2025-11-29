@@ -1,21 +1,19 @@
-# 切换到 Debian 系统，以便安装 WARP CLI
 FROM debian:bookworm-slim
 
-# 保持非交互模式
+# 设置为非交互模式
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 安装依赖、Cloudflare 服务和 Sing-box
+# 安装核心依赖、Cloudflare 服务和 Sing-box
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
         curl wget bash ca-certificates uuid-runtime gnupg2 procps iproute2 && \
-    # 1. 安装 Cloudflared (官方源)
+    # 1. 添加 Cloudflare 源并安装 Cloudflared/WARP
     curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --dearmor | tee /usr/share/keyrings/cloudflare-warp.gpg >/dev/null && \
-    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ bookworm main" | tee /etc/apt/sources.list.d/cloudflare-warp.list && \
+    # !!! 修正：将 suite name 从 bookworm 改为 bullseye，解决 E: Unable to locate package 错误 !!!
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ bullseye main" | tee /etc/apt/sources.list.d/cloudflare-warp.list && \
     apt-get update -y && \
-    apt-get install -y cloudflared && \
-    # 2. 安装 WARP CLI (官方源)
-    apt-get install -y warp-cli && \
-    # 3. 下载 Sing-box (官方源)
+    apt-get install -y cloudflared warp-cli && \
+    # 2. 下载 Sing-box (官方源 v1.9.0)
     wget -qO singbox.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.9.0/sing-box-1.9.0-linux-amd64.tar.gz && \
     tar -xzf singbox.tar.gz && \
     mv sing-box-*/sing-box /usr/bin/sing-box && \
@@ -24,7 +22,7 @@ RUN apt-get update -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# 最终启动脚本
+# Final setup: 创建启动脚本 /start.sh
 RUN echo '#!/bin/bash' > /start.sh && \
     # 1. 启动 WARP (必须先运行)
     echo 'warp-cli set-mode tunnel && warp-cli set-proxy-mode remote && warp-cli connect' >> /start.sh && \
